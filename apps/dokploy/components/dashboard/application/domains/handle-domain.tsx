@@ -220,6 +220,12 @@ export const AddDomain = ({ id, type, domainId = "", children }: Props) => {
 	};
 
 	const onSubmit = async (data: Domain) => {
+		
+		const trimmedData = {
+			...data,
+			host: data.host.trim()
+		};
+		
 		await mutateAsync({
 			domainId,
 			...(data.domainType === "application" && {
@@ -228,7 +234,7 @@ export const AddDomain = ({ id, type, domainId = "", children }: Props) => {
 			...(data.domainType === "compose" && {
 				composeId: id,
 			}),
-			...data,
+			...trimmedData,
 		})
 			.then(async () => {
 				toast.success(dictionary.success);
