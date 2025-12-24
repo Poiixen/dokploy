@@ -31,10 +31,23 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { api } from "@/utils/api";
 import {
 	AlertTriangle,
+	ArrowDownAZ,
+	ArrowDownWideNarrow,
+	ArrowUpAZ,
+	ArrowUpNarrowWide,
 	BookIcon,
+	Calendar,
+	CalendarClock,
 	ExternalLinkIcon,
 	FolderInput,
 	Loader2,
@@ -43,10 +56,46 @@ import {
 	TrashIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { HandleProject } from "./handle-project";
 import { ProjectEnvironment } from "./project-environment";
+
+// Sort options configuration
+const SORT_OPTIONS = [
+	{ value: "name-asc", label: "Name (A–Z)", icon: ArrowDownAZ },
+	{ value: "name-desc", label: "Name (Z–A)", icon: ArrowUpAZ },
+	{ value: "date-desc", label: "Created (Newest)", icon: CalendarClock },
+	{ value: "date-asc", label: "Created (Oldest)", icon: Calendar },
+	{ value: "services-desc", label: "Services (Most)", icon: ArrowDownWideNarrow },
+	{ value: "services-asc", label: "Services (Least)", icon: ArrowUpNarrowWide },
+] as const;
+
+type SortValue = typeof SORT_OPTIONS[number]["value"];
+
+const STORAGE_KEY = "projects-sort-preference";
+const DEFAULT_SORT: SortValue = "date-desc";
+
+// Helper to get total services for a project
+const getTotalServices = (project: {
+	mariadb: unknown[];
+	mongo: unknown[];
+	mysql: unknown[];
+	postgres: unknown[];
+	redis: unknown[];
+	applications: unknown[];
+	compose: unknown[];
+}) => {
+	return (
+		project.mariadb.length +
+		project.mongo.length +
+		project.mysql.length +
+		project.postgres.length +
+		project.redis.length +
+		project.applications.length +
+		project.compose.length
+	);
+};
 
 export const ShowProjects = () => {
 	const utils = api.useUtils();
@@ -54,15 +103,58 @@ export const ShowProjects = () => {
 	const { data: auth } = api.user.get.useQuery();
 	const { mutateAsync } = api.project.remove.useMutation();
 	const [searchQuery, setSearchQuery] = useState("");
+	const [sortBy, setSortBy] = useState<SortValue>(DEFAULT_SORT);
 
-	const filteredProjects = useMemo(() => {
+	// Load sort preference from localStorage on mount
+	useEffect(() => {
+		const savedSort = localStorage.getItem(STORAGE_KEY);
+		if (savedSort && SORT_OPTIONS.some((opt) => opt.value === savedSort)) {
+			setSortBy(savedSort as SortValue);
+		}
+	}, []);
+
+	// Save sort preference to localStorage when it changes
+	const handleSortChange = (value: SortValue) => {
+		setSortBy(value);
+		localStorage.setItem(STORAGE_KEY, value);
+	};
+
+	const filteredAndSortedProjects = useMemo(() => {
 		if (!data) return [];
-		return data.filter(
+
+		// First, filter by search query
+		let result = data.filter(
 			(project) =>
 				project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
 				project.description?.toLowerCase().includes(searchQuery.toLowerCase()),
 		);
-	}, [data, searchQuery]);
+
+		// Then, sort based on selected option
+		result = [...result].sort((a, b) => {
+			switch (sortBy) {
+				case "name-asc":
+					return a.name.localeCompare(b.name);
+				case "name-desc":
+					return b.name.localeCompare(a.name);
+				case "date-asc":
+					return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+				case "date-desc":
+					return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+				case "services-asc":
+					return getTotalServices(a) - getTotalServices(b);
+				case "services-desc":
+					return getTotalServices(b) - getTotalServices(a);
+				default:
+					return 0;
+			}
+		});
+
+		return result;
+	}, [data, searchQuery, sortBy]);
+
+	// Get current sort option for display
+	const currentSortOption = SORT_OPTIONS.find((opt) => opt.value === sortBy);
+	const SortIcon = currentSortOption?.icon ?? ArrowDownWideNarrow;
 
 	return (
 		<>
@@ -98,16 +190,44 @@ export const ShowProjects = () => {
 								</div>
 							) : (
 								<>
-									<div className="w-full relative">
-										<Input
-											placeholder="Filter projects..."
-											value={searchQuery}
-											onChange={(e) => setSearchQuery(e.target.value)}
-											className="pr-10"
-										/>
-										<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+									{/* Search and Sort Controls */}
+									<div className="flex flex-col sm:flex-row gap-3 w-full">
+										{/* Search Input */}
+										<div className="flex-1 relative">
+											<Input
+												placeholder="Filter projects..."
+												value={searchQuery}
+												onChange={(e) => setSearchQuery(e.target.value)}
+												className="pr-10"
+											/>
+											<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+										</div>
+
+										{/* Sort Dropdown */}
+										<Select value={sortBy} onValueChange={handleSortChange}>
+											<SelectTrigger className="w-full sm:w-[200px]">
+												<div className="flex items-center gap-2">
+													<SortIcon className="size-4 text-muted-foreground" />
+													<SelectValue placeholder="Sort by..." />
+												</div>
+											</SelectTrigger>
+											<SelectContent>
+												{SORT_OPTIONS.map((option) => {
+													const Icon = option.icon;
+													return (
+														<SelectItem key={option.value} value={option.value}>
+															<div className="flex items-center gap-2">
+																<Icon className="size-4 text-muted-foreground" />
+																<span>{option.label}</span>
+															</div>
+														</SelectItem>
+													);
+												})}
+											</SelectContent>
+										</Select>
 									</div>
-									{filteredProjects?.length === 0 && (
+
+									{filteredAndSortedProjects?.length === 0 && (
 										<div className="mt-6 flex h-[50vh] w-full flex-col items-center justify-center space-y-4">
 											<FolderInput className="size-8 self-center text-muted-foreground" />
 											<span className="text-center font-medium text-muted-foreground">
@@ -116,7 +236,7 @@ export const ShowProjects = () => {
 										</div>
 									)}
 									<div className="w-full grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 3xl:grid-cols-5 flex-wrap gap-5">
-										{filteredProjects?.map((project) => {
+										{filteredAndSortedProjects?.map((project) => {
 											const emptyServices =
 												project?.mariadb.length === 0 &&
 												project?.mongo.length === 0 &&
@@ -126,14 +246,7 @@ export const ShowProjects = () => {
 												project?.applications.length === 0 &&
 												project?.compose.length === 0;
 
-											const totalServices =
-												project?.mariadb.length +
-												project?.mongo.length +
-												project?.mysql.length +
-												project?.postgres.length +
-												project?.redis.length +
-												project?.applications.length +
-												project?.compose.length;
+											const totalServices = getTotalServices(project);
 
 											return (
 												<div
