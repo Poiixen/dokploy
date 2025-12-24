@@ -22,14 +22,17 @@ import { Switch } from "@/components/ui/switch";
 import { generateSHA256Hash } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2, User } from "lucide-react";
+import { Loader2, Upload, User, X } from "lucide-react";
 import { useTranslation } from "next-i18next";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Disable2FA } from "./disable-2fa";
 import { Enable2FA } from "./enable-2fa";
+
+const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB in bytes
+const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp"];
 
 const profileSchema = z.object({
 	name: z.string(),
@@ -70,6 +73,9 @@ export const ProfileForm = () => {
 	} = api.user.update.useMutation();
 	const { t } = useTranslation("settings");
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
+	const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+	const [uploadError, setUploadError] = useState<string | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const availableAvatars = useMemo(() => {
 		if (gravatarHash === null) return randomImages;
@@ -90,14 +96,32 @@ export const ProfileForm = () => {
 		resolver: zodResolver(profileSchema),
 	});
 
+	// Check if current image is an uploaded image (base64 or not in predefined list)
+	const isUploadedImage = useCallback((imageUrl: string | undefined) => {
+		if (!imageUrl) return false;
+		// Base64 images start with "data:"
+		if (imageUrl.startsWith("data:")) return true;
+		// Check if it's not a predefined avatar or gravatar
+		const isPredefined = randomImages.includes(imageUrl);
+		const isGravatar = imageUrl.includes("gravatar.com");
+		return !isPredefined && !isGravatar;
+	}, []);
+
 	useEffect(() => {
 		if (data) {
+			const currentImage = data?.user?.image || "";
+			
+			// If the user has an uploaded image, set it to uploadedImage state
+			if (isUploadedImage(currentImage)) {
+				setUploadedImage(currentImage);
+			}
+
 			form.reset(
 				{
 					name: data?.user?.name || "",
 					email: data?.user?.email || "",
 					password: form.getValues("password") || "",
-					image: data?.user?.image || "",
+					image: currentImage,
 					currentPassword: form.getValues("currentPassword") || "",
 					allowImpersonation: data?.user?.allowImpersonation,
 				},
@@ -113,7 +137,54 @@ export const ProfileForm = () => {
 				});
 			}
 		}
-	}, [form, data]);
+	}, [form, data, isUploadedImage]);
+
+	const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+		const file = event.target.files?.[0];
+		setUploadError(null);
+
+		if (!file) return;
+
+		// Validate file type
+		if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+			setUploadError("Please upload a valid image file (JPEG, PNG, GIF, or WebP)");
+			return;
+		}
+
+		// Validate file size (2MB max)
+		if (file.size > MAX_FILE_SIZE) {
+			setUploadError("Image size must be less than 2MB");
+			return;
+		}
+
+		// Convert to base64
+		const reader = new FileReader();
+		reader.onload = (e) => {
+			const base64String = e.target?.result as string;
+			setUploadedImage(base64String);
+			form.setValue("image", base64String);
+		};
+		reader.onerror = () => {
+			setUploadError("Failed to read file. Please try again.");
+		};
+		reader.readAsDataURL(file);
+
+		// Reset file input so the same file can be selected again
+		if (fileInputRef.current) {
+			fileInputRef.current.value = "";
+		}
+	}, [form]);
+
+	const handleUploadClick = useCallback(() => {
+		fileInputRef.current?.click();
+	}, []);
+
+	const handleRemoveUploadedImage = useCallback(() => {
+		setUploadedImage(null);
+		setUploadError(null);
+		// Reset to first predefined avatar
+		form.setValue("image", randomImages[0]);
+	}, [form]);
 
 	const onSubmit = async (values: Profile) => {
 		await mutateAsync({
@@ -252,34 +323,104 @@ export const ProfileForm = () => {
 															{t("settings.profile.avatar")}
 														</FormLabel>
 														<FormControl>
-															<RadioGroup
-																onValueChange={(e) => {
-																	field.onChange(e);
-																}}
-																defaultValue={field.value}
-																value={field.value}
-																className="flex flex-row flex-wrap gap-2 max-xl:justify-center"
-															>
-																{availableAvatars.map((image) => (
-																	<FormItem key={image}>
-																		<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
-																			<FormControl>
-																				<RadioGroupItem
-																					value={image}
-																					className="sr-only"
-																				/>
-																			</FormControl>
+															<div className="space-y-3">
+																{/* Hidden file input */}
+																<input
+																	ref={fileInputRef}
+																	type="file"
+																	accept={ACCEPTED_IMAGE_TYPES.join(",")}
+																	onChange={handleFileUpload}
+																	className="hidden"
+																	aria-label="Upload profile picture"
+																/>
 
-																			<img
-																				key={image}
-																				src={image}
-																				alt="avatar"
-																				className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
-																			/>
-																		</FormLabel>
-																	</FormItem>
-																))}
-															</RadioGroup>
+																<RadioGroup
+																	onValueChange={(e) => {
+																		field.onChange(e);
+																	}}
+																	defaultValue={field.value}
+																	value={field.value}
+																	className="flex flex-row flex-wrap gap-2 max-xl:justify-center items-center"
+																>
+																	{/* Upload button */}
+																	<div className="relative">
+																		{uploadedImage ? (
+																			<FormItem>
+																				<FormLabel className="[&:has([data-state=checked])>div]:border-primary [&:has([data-state=checked])>div]:border-1 [&:has([data-state=checked])>div]:p-px cursor-pointer">
+																					<FormControl>
+																						<RadioGroupItem
+																							value={uploadedImage}
+																							className="sr-only"
+																						/>
+																					</FormControl>
+																					<div className="relative h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform overflow-hidden group">
+																						<img
+																							src={uploadedImage}
+																							alt="Uploaded avatar"
+																							className="h-full w-full object-cover"
+																						/>
+																						{/* Remove button overlay */}
+																						<button
+																							type="button"
+																							onClick={(e) => {
+																								e.preventDefault();
+																								e.stopPropagation();
+																								handleRemoveUploadedImage();
+																							}}
+																							className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+																							aria-label="Remove uploaded image"
+																						>
+																							<X className="h-4 w-4 text-white" />
+																						</button>
+																					</div>
+																				</FormLabel>
+																			</FormItem>
+																		) : (
+																			<button
+																				type="button"
+																				onClick={handleUploadClick}
+																				className="h-12 w-12 rounded-full border-2 border-dashed border-muted-foreground/50 hover:border-primary hover:bg-muted/50 transition-all flex items-center justify-center cursor-pointer"
+																				aria-label="Upload custom avatar"
+																			>
+																				<Upload className="h-5 w-5 text-muted-foreground" />
+																			</button>
+																		)}
+																	</div>
+
+																	{/* Predefined avatars */}
+																	{availableAvatars.map((image) => (
+																		<FormItem key={image}>
+																			<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border-1 [&:has([data-state=checked])>img]:p-px cursor-pointer">
+																				<FormControl>
+																					<RadioGroupItem
+																						value={image}
+																						className="sr-only"
+																					/>
+																				</FormControl>
+
+																				<img
+																					key={image}
+																					src={image}
+																					alt="avatar"
+																					className="h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-transform"
+																				/>
+																			</FormLabel>
+																		</FormItem>
+																	))}
+																</RadioGroup>
+
+																{/* Upload error message */}
+																{uploadError && (
+																	<p className="text-sm text-destructive">
+																		{uploadError}
+																	</p>
+																)}
+
+																{/* Helper text */}
+																<p className="text-xs text-muted-foreground">
+																	Click the upload icon to add a custom avatar (max 2MB, JPEG/PNG/GIF/WebP)
+																</p>
+															</div>
 														</FormControl>
 														<FormMessage />
 													</FormItem>
