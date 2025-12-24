@@ -36,7 +36,10 @@ const ACCEPTED_IMAGE_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/gif
 
 const profileSchema = z.object({
 	name: z.string(),
-	email: z.string(),
+	email: z
+		.string()
+		.min(1, { message: "Email is required" })
+		.email({ message: "Please enter a valid email address" }),
 	password: z.string().nullable(),
 	currentPassword: z.string().nullable(),
 	image: z.string().optional(),
